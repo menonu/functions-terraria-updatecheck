@@ -1,8 +1,7 @@
 import { AzureFunction, Context } from "@azure/functions";
+import { CosmosClient, Container } from "@azure/cosmos";
 import axios from "axios";
 import * as cheerio from "cheerio";
-import * as mongodb from "mongodb";
-const mongoClient = mongodb.MongoClient;
 
 interface VerObj {
   id: string;
@@ -32,52 +31,43 @@ const timerTrigger: AzureFunction = async function (context: Context, myTimer: a
     await axios.post(webhook_url, JSON.stringify(contents));
   };
 
-  const mongourl = process.env["MONGODB_URL"];
-
-  let client = await mongoClient.connect(mongourl, {
-    useUnifiedTopology: true,
-  });
-
-  const insertnew = async (cl: mongodb.Collection<any>) => {
-    await collection.insertOne({
+  const insertnew = async (c: Container, v: string) => {
+    await c.items.create({
       id: "latest",
       date: new Date().toISOString(),
-      versionstring: version_text,
+      versionstring: v,
     });
   };
 
-  const updatecurrent = async (cl: mongodb.Collection<any>, current: VerObj, next: string) => {
+  const updatecurrent = async (c: Container, current: any, next: string) => {
     const prev = current.versionstring;
     if (prev !== next) {
       notify(next);
     }
 
-    const value = {
-      id: "latest",
+    const v = {
+      ...current,
       date: new Date().toISOString(),
       versionstring: next,
     };
 
-    await cl.updateOne({ id: "latest" }, { $set: value });
+    await c.item("latest").replace(v);
   };
 
-  let collection = client.db("azfdb").collection("terrariaserver");
-  const kv: VerObj = await collection.findOne({
-    id: "latest",
-  });
+  const endpoint = process.env["AZFDB_EP"];
+  const key = process.env["AZFDB_KEY"];
+  const client = new CosmosClient({ endpoint, key });
+  const container = await client.database("azfdb").container("terrariaserver");
 
-  if (!kv) {
-    await insertnew(collection);
+  const { resource: latest } = await container.item("latest").read();
+
+  if (!latest) {
+    await insertnew(container, version_text);
   } else {
-    if ("date" in kv) {
-      await updatecurrent(collection, kv, version_text);
-    } else {
-      await insertnew(collection);
-    }
+    await updatecurrent(container, latest, version_text);
   }
 
-  console.log(kv);
-  await client.close();
+  console.log(version_text);
 };
 
 export default timerTrigger;
